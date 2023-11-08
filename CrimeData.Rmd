@@ -1,0 +1,204 @@
+---
+title: "Final Project"
+author: "Michael Moerk"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r}
+# Load appropriate libraries
+library(pROC)
+library(xtable)
+library(car)
+library(statmod)
+library(corrplot)
+library(ggplot2)
+library(dplyr)
+library(car)
+library(gridExtra)
+library(glmnet)
+library(kableExtra)
+library(knitr)
+```
+
+```{r}
+# Load and clean the data
+crimedata <- crimedat <- read.delim("~/Causal/STA FINAL/crimedat")
+crimedata <- crimedata |>
+  mutate_all(funs(replace(., . == "?", NA)))
+
+missing_counts <- colSums(is.na(crimedata))
+missing_summary <- data.frame(
+  Column = names(missing_counts),
+  Missing_Count = missing_counts
+)
+
+columns_to_exclude <- missing_summary$Column[missing_summary$Missing_Count > 1000]
+
+crimedata_filtered <- crimedata[, !names(crimedata) %in% columns_to_exclude]
+
+missing_counts2 <- colSums(is.na(crimedata_filtered))
+missing_summary2 <- data.frame(
+  Column = names(missing_counts2),
+  Missing_Count = missing_counts2
+)
+
+rows_with_nan <- !complete.cases(crimedata_filtered)
+crimedata_no_nan <- crimedata_filtered[!rows_with_nan, ]
+nan_indices <- which(is.na(crimedata_no_nan), arr.ind = TRUE)
+crimedata_clean <- crimedata_no_nan[,4:length(crimedata_no_nan)]
+# Convert 'OtherPerCap' column to integers
+crimedata_clean$OtherPerCap <- as.integer(crimedata_clean$OtherPerCap)
+
+
+crimedata_clean <- crimedata_clean %>%
+  select(-NumImmig, -murdPerPop, -rapesPerPop, -robbbPerPop, -assaultPerPop, -burglaries, -larcenies, -autoTheft, -arsons, -OwnOccQrange, -RentQrange, -population, -PctOccupManu)
+
+```
+
+```{r}
+non_numeric_vars <- sapply(crimedata_clean, function(x) !is.numeric(x) && !is.integer(x))
+non_numeric_var_names <- names(non_numeric_vars[non_numeric_vars])
+crimedata_clean[, non_numeric_var_names] <- lapply(crimedata_clean[, non_numeric_var_names], as.numeric)
+```
+
+
+# Stepwise Selection
+```{r}
+model_full <- lm(ViolentCrimesPerPop ~., data = crimedata_clean)
+
+backward_custom <- step(model_full, direction = 'backward', trace = 0)
+
+aic_val_custom <- backward_custom$anova
+
+aic_val_custom$diff <- c(NA, diff(aic_val_custom$AIC))
+vars_to_remove <- aic_val_custom$Step[1:36] #46
+vars_to_remove <- sub("^- ", "", vars_to_remove)
+vars_to_remove <- vars_to_remove[-1]
+
+crimedata_clean_selection <- crimedata_clean[, !names(crimedata_clean) %in% vars_to_remove]
+length(crimedata_clean_selection)
+```
+
+```{r}
+lm3 <- lm(ViolentCrimesPerPop ~., data = crimedata_clean_selection)
+vif_values3 <- vif(lm3)
+
+sorted_vif_values3 <- sort(vif_values3, decreasing = TRUE)
+
+crimedata_minimal <- crimedata_clean_selection
+vif_threshold <- 10
+while (any(vif_values3 > vif_threshold)) {
+  
+  high_vif_columns <- names(vif_values3[vif_values3 > vif_threshold])
+
+  # Update 'crimedata_minimal' by removing the identified columns
+  crimedata_minimal <- crimedata_minimal[, !names(crimedata_minimal) %in% high_vif_columns]
+
+  # Re-fit the linear model with the updated 'crimedata_minimal'
+  lm3 <- lm(ViolentCrimesPerPop ~ ., data = crimedata_minimal)
+
+  # Calculate VIF values for the updated model
+  vif_values3 <- car::vif(lm3)
+}
+lm4 <- lm(ViolentCrimesPerPop ~., data = crimedata_minimal)
+vif_values4 <- vif(lm4)
+sorted_vif_values4 <- sort(vif_values4, decreasing = TRUE)
+length(sorted_vif_values4)
+```
+
+
+```{r}
+plot_list <- list()
+
+explanatory_vars <- noquote(setdiff(names(crimedata_minimal), "ViolentCrimesPerPop"))
+response_var <- "ViolentCrimesPerPop"
+
+for (var in explanatory_vars) {
+  formula <- as.formula(paste(response_var, "~", var))
+  lm_model <- lm(formula, data = crimedata_minimal)
+  
+  plot_data <- data.frame(x = crimedata_minimal[[var]], resids = lm_model$residuals)
+  plot <- ggplot(plot_data, aes(x = x, y = resids)) +
+    geom_point() +
+    geom_smooth() +
+    theme_bw() +
+    labs(x = var, y = response_var)
+
+  plot_list[[var]] <- plot
+}
+
+for (i in 1:length(plot_list)){
+  print(plot_list[[i]])
+}
+```
+
+```{r}
+response_var <- "ViolentCrimesPerPop"
+lm_model ~ lm(ViolentCrimesPerPop ~. , data = crimedata_minimal)
+  
+library(ggplot2)
+library(gridExtra)
+
+# First plot
+plot_data1 <- data.frame(x = crimedata_minimal$pctWFarmSelf, resids = lm_model$residuals)
+plot1 <- ggplot(plot_data1, aes(x = x, y = resids)) +
+  geom_point() +
+  geom_smooth() +
+  theme_bw() +
+  xlim(0, 4) +
+  labs(x = "Percnt of Household Farm or Self Employment Income in 1989", y = "Violent Crimes per 100k Population")
+
+
+plot_data2 <- data.frame(x = crimedata_minimal$pctWRetire, resids = lm_model$residuals)
+plot2 <- ggplot(plot_data2, aes(x = x, y = resids)) +
+  geom_point() +
+  geom_smooth() +
+  theme_bw() +
+  labs(x = "Percent of People Living in the Same City as 5 Years Ago", y = "Violent Crimes per 100k Population")
+
+
+grid.arrange(plot1, plot2, ncol = 2)
+
+```
+
+
+```{r}
+# Check for cooks distance
+cd <- cooks.distance(lm4)
+n <- length(crimedata_minimal)
+threshold <- 4/n
+cooks_distance <- which(cd > threshold)
+```
+
+
+```{r}
+library("webshot")
+lm_summary <- summary(lm4)
+coefficients_df <- as.data.frame(lm_summary$coefficients)
+
+sorted_coefficients_df <- coefficients_df[order(coefficients_df$`Pr(>|t|)`, decreasing = FALSE), ]
+
+sorted_coefficients_df$Rank <- 1:nrow(sorted_coefficients_df)
+
+m <- length(sorted_coefficients_df$Rank)
+
+sorted_coefficients_df$'Comparison Pr(>|t|)' <- (sorted_coefficients_df$Rank/m)*0.10
+
+rows_with_condition <- sorted_coefficients_df[1:length(sorted_coefficients_df$'Comparison Pr(>|t|)'), ]
+rows_with_condition[,1:3] <- round(rows_with_condition[,1:3],5)
+#rows_with_condition[,4:6] <- round(rows_with_condition[,4:6],4)
+
+kable_table <- knitr::kable(rows_with_condition)
+save_kable <- kable_table |>
+  kable_styling() |>
+  save_kable("~/Causal/STA FINAL.pdf") 
+```
+
+
+
+
+
+
+
+
