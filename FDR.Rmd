@@ -1,0 +1,315 @@
+---
+title: "FDR"
+author: "Dizhou Wu"
+date: '2023-10-20'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Verification of Benjamini-Hochberg Procedure
+
+```{r}
+# Random seed
+set.seed(110)
+
+# Set the parameters
+nsamp <- 100           # Number of hypotheses to test
+n <- 50                # Sample size for each hypothesis
+m0 <- 0.8*nsamp        # Number of true null hypotheses
+mu_alternative <- 0.3  # Mean for the alternative hypothesis (for the false null hypotheses)
+alpha <- 0.05          # Significance level for FDR control
+iterations <- 1000     # Number of iterations for simulation
+
+# Function to simulate one iteration
+simulate_one_iteration <- function(nsamp, n, m0, mu_alternative, alpha) {
+  # Generate the data
+  # True null hypotheses
+  data_true_null <- matrix(rnorm(m0 * n, mean = 0, sd = 1), ncol = n)
+  # False null hypotheses
+  data_false_null <- matrix(rnorm((nsamp - m0) * n, mean = mu_alternative, sd = 1), ncol = n)
+  data <- rbind(data_true_null, data_false_null)
+  
+  # Perform hypothesis tests and collect p-values
+  p_values <- apply(data, 1, function(sample) {
+    test <- t.test(sample, mu = 0)
+    test$p.value
+  })
+  
+  # Apply the Benjamini-Hochberg procedure (The adjusted p-value for the test with rank \( i \) is calculated as the smallest of the adjusted p-values for ranks greater than or equal to \( i \) and is given by \(\min\left( p_{(i)} \frac{m}{i}, 1 \right)\).)
+  p_adjusted <- p.adjust(p_values, method = "BH")
+  
+  # Determine the number of false positives and true positives
+  V <- sum(p_adjusted[1:m0] < alpha) # True nulls incorrectly rejected
+  S <- sum(p_adjusted[(m0 + 1):nsamp] < alpha) # False nulls correctly rejected
+  
+  # Calculate FDR for this iteration (protect against division by zero)
+  FDR <- ifelse((V + S) > 0, V / (V + S), 0)
+  
+  # Return the FDR and the number of false positives and true positives as a list
+  return(list(FDR = FDR, V = V, S = S))
+}
+
+# Run the simulation over many iterations and store the results as a list of lists
+results <- replicate(iterations, simulate_one_iteration(nsamp, n, m0, mu_alternative, alpha), simplify = FALSE)
+
+# Calculate the average FDR, V, and S over all iterations
+average_FDR <- mean(sapply(results, function(res) res$FDR))
+average_V <- mean(sapply(results, function(res) res$V))
+average_S <- mean(sapply(results, function(res) res$S))
+
+# Print the results
+cat("Average V:", average_V, "\n")
+cat("Average S:", average_S, "\n")
+cat("Average FDR:", average_FDR, "\n")
+```
+
+```{r}
+#fdr <- rep(0,iterations)
+#for (i in 1:iterations){
+ # fdr[i] <- results[[i]]$FDR
+#}
+#mean(fdr<0.05)
+```
+
+```{r}
+#hist(sapply(results, function(res) res$FDR))
+```
+
+## Comparison of Procedure Across different Numbers of Hypotheses
+
+```{r}
+# Random seed
+set.seed(110)
+
+# Function to simulate one iteration with a given number of hypotheses
+simulate_one_iteration <- function(nsamp, n, m0, mu_alternative, alpha) {
+  # Generate the data for true null and false null hypotheses
+  data_true_null <- matrix(rnorm(m0 * n, mean = 0, sd = 1), ncol = n)
+  data_false_null <- matrix(rnorm((nsamp - m0) * n, mean = mu_alternative, sd = 1), ncol = n)
+  data <- rbind(data_true_null, data_false_null)
+  
+  # Perform hypothesis tests and collect p-values
+  p_values <- apply(data, 1, function(sample) {
+    test <- t.test(sample, mu = 0)
+    test$p.value
+  })
+  
+  # Apply the Benjamini-Hochberg procedure
+  p_adjusted <- p.adjust(p_values, method = "BH")
+  
+  # Determine the number of false positives and true positives
+  V <- sum(p_adjusted[1:m0] < alpha)
+  S <- sum(p_adjusted[(m0 + 1):nsamp] < alpha)
+  
+  # Calculate the FDR and power for this iteration
+  FDR <- ifelse((V + S) > 0, V / (V + S), 0)
+  power <- S / (nsamp - m0)
+  
+  # Return the FDR and power as a list
+  return(list(FDR = FDR, power = power))
+}
+
+# Function to run the simulation for different numbers of hypotheses
+run_simulation <- function(hypothesis_set_sizes, n, m0_ratio, mu_alternative, alpha, iterations) {
+  results <- list()
+  
+  # Loop over the different hypothesis set sizes
+  for (nsamp in hypothesis_set_sizes) {
+    m0 <- round(nsamp * m0_ratio) # Number of true null hypotheses based on ratio
+    # Run the simulation for the current number of hypotheses
+    iteration_results <- replicate(iterations, simulate_one_iteration(nsamp, n, m0, mu_alternative, alpha), simplify = FALSE)
+    
+    # Calculate the average FDR and power over all iterations
+    average_FDR <- mean(sapply(iteration_results, function(res) res$FDR))
+    average_power <- mean(sapply(iteration_results, function(res) res$power))
+    
+    # Store the results
+    results[[as.character(nsamp)]] <- list(FDR = average_FDR, power = average_power)
+  }
+  
+  return(results)
+}
+
+# Parameters
+n <- 50                   # Sample size for each hypothesis
+m0_ratio <- 0.8           # Ratio of true null hypotheses
+mu_alternative <- 0.5       # Mean for the alternative hypothesis
+alpha <- 0.05             # Significance level for FDR control
+iterations <- 1000        # Number of iterations for simulation
+hypothesis_set_sizes <- c(5, 10, 50, 100, 500) # Different numbers of hypotheses to test
+
+# Run the simulation
+comparison_results <- run_simulation(hypothesis_set_sizes, n, m0_ratio, mu_alternative, alpha, iterations)
+
+# Print the results
+print(comparison_results)
+```
+
+```{r}
+# Load library
+library(ggplot2)
+
+# Extract the number of hypotheses (as character), FDR, and power into vectors
+hypothesis_set_sizes <- as.numeric(names(comparison_results))
+fdr_values <- sapply(comparison_results, function(x) x$FDR)
+power_values <- sapply(comparison_results, function(x) x$power)
+
+# Create a data frame for plotting
+plot_data <- data.frame(
+  HypothesisSetSize = hypothesis_set_sizes,
+  FDR = fdr_values,
+  Power = power_values
+)
+
+# Plot FDR against number of hypotheses
+ggplot(plot_data, aes(x = HypothesisSetSize, y = FDR)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  ggtitle("FDR vs. Number of Hypotheses") +
+  xlab("Number of Hypotheses") +
+  ylab("False Discovery Rate (FDR)")
+
+# Plot power against number of hypotheses
+ggplot(plot_data, aes(x = HypothesisSetSize, y = Power)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  ggtitle("Power vs. Number of Hypotheses") +
+  xlab("Number of Hypotheses") +
+  ylab("Power")
+
+```
+
+## Assessment of Independence Assumption
+
+```{r}
+# Load the MASS package for the mvrnorm function
+library(MASS)
+
+# Random seed
+set.seed(110)
+
+# Function to simulate one iteration with correlation
+simulate_one_iteration_with_correlation <- function(nsamp, n, m0, mu_alternative, alpha, correlation_matrix) {
+  # Generate the correlated data
+  data <- mvrnorm(n, mu = rep(0, nsamp), Sigma = correlation_matrix)
+  
+  # Adjust means for the alternative hypothesis
+  for (i in (m0 + 1):nsamp) {
+    data[, i] <- data[, i] + mu_alternative
+  }
+  
+  # Perform hypothesis tests and collect p-values
+  p_values <- apply(data, 2, function(sample) {
+    test <- t.test(sample, mu = 0)
+    test$p.value
+  })
+  
+  # Apply the Benjamini-Hochberg procedure
+  p_adjusted <- p.adjust(p_values, method = "BH")
+  
+  # Determine the number of false positives and true positives
+  V <- sum(p_adjusted[1:m0] < alpha)
+  S <- sum(p_adjusted[(m0 + 1):nsamp] < alpha)
+  
+  # Calculate the FDR and power for this iteration
+  FDR <- ifelse((V + S) > 0, V / (V + S), 0)
+  power <- S / (nsamp - m0)
+  
+  # Return the FDR and power as a list
+  return(list(FDR = FDR, power = power))
+}
+
+# Function to run the simulation for different correlation coefficients
+run_simulation_with_correlation <- function(nsamp, n, m0, mu_alternative, alpha, iterations, rho_values) {
+  results <- list()
+  
+  # Loop over the different correlation coefficients
+  for (rho in rho_values) {
+    # Create correlation matrix
+    correlation_matrix <- matrix(rho, nsamp, nsamp)  # Fill the matrix with rho
+    diag(correlation_matrix) <- 1  # Set the diagonal to 1 for variances
+    
+    # Run the simulation for the current correlation coefficient
+    iteration_results <- replicate(iterations, simulate_one_iteration_with_correlation(nsamp, n, m0, mu_alternative, alpha, correlation_matrix), simplify = FALSE)
+    
+    # Calculate the average FDR and power over all iterations
+    average_FDR <- mean(sapply(iteration_results, function(res) res$FDR))
+    average_power <- mean(sapply(iteration_results, function(res) res$power))
+    
+    # Store the results for the current correlation coefficient
+    results[[paste0("rho_", rho)]] <- list(FDR = average_FDR, power = average_power)
+  }
+  
+  return(results)
+}
+
+# Parameters
+nsamp <- 100                 # Number of hypotheses
+n <- 50                      # Sample size for each hypothesis
+m0 <- 80                     # Number of true null hypotheses
+mu_alternative <- 0.5          # Mean for the alternative hypothesis
+alpha <- 0.05                # Significance level for FDR control
+iterations <- 1000           # Number of iterations for simulation
+rho_values <- c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9) # Different correlation coefficients to test
+
+# Run the simulation for different values of rho
+comparison_results_correlation <- run_simulation_with_correlation(nsamp, n, m0, mu_alternative, alpha, iterations, rho_values)
+
+# Print the results
+print(comparison_results_correlation)
+```
+
+```{r}
+# Create vectors to store the FDR and power values
+fdr_values <- numeric(length(rho_values))
+power_values <- numeric(length(rho_values))
+
+# Extract the FDR and power values for each rho
+for (i in seq_along(rho_values)) {
+  rho_key <- paste0("rho_", rho_values[i])
+  fdr_values[i] <- comparison_results_correlation[[rho_key]]$FDR
+  power_values[i] <- comparison_results_correlation[[rho_key]]$power
+}
+
+# Load library
+library(ggplot2)
+
+# Create a data frame for plotting
+plot_data <- data.frame(
+  rho = rho_values,
+  FDR = fdr_values,
+  Power = power_values
+)
+
+# Plot FDR against rho
+ggplot(plot_data, aes(x = rho, y = FDR)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  ggtitle("FDR vs. Correlation Coefficient (rho)") +
+  xlab("Correlation Coefficient (rho)") +
+  ylab("False Discovery Rate (FDR)")
+
+# Plot power against rho
+ggplot(plot_data, aes(x = rho, y = Power)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  ggtitle("Power vs. Correlation Coefficient (rho)") +
+  xlab("Correlation Coefficient (rho)") +
+  ylab("Power")
+```
+
+
+
+
+
+
+
+
+
